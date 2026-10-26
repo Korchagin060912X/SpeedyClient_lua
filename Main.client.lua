@@ -42,15 +42,15 @@ local antiAfkEnabled = false
 local antiAfkGeneration = 0
 local activeAntiAfkHumanoid
 local menuIsOpen = true
-local autoFarmEnabled = { Coin = false, Candy = false }
-local autoFarmSpeed = 40
-local autoFarmRunning = false
+local autoFarmEnabled = false
+local autoFarmGeneration = 0
 local activeFarmTween
 local activeFarmHumanoid
-local activeFarmWalkSpeed
+local activeFarmAutoRotate
+local activeFarmPlatformStand
 local farmCollisionStates
-local sliderDragUpdate
-local autoFarmToggleButtons = {}
+local autoFarmToggleButton
+local autoFarmTravelSpeed = 55
 
 local window = create("Frame", {
 	Name = "Window",
@@ -300,9 +300,6 @@ end
 inputChangedConnection = UserInputService.InputChanged:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseMovement
 		or input.UserInputType == Enum.UserInputType.Touch then
-		if sliderDragUpdate then
-			sliderDragUpdate(input.Position.X)
-		end
 		if launcherDragging and launcherDragStart and launcherStart then
 			local delta = input.Position - launcherDragStart
 			if delta.Magnitude > 4 then
@@ -332,7 +329,6 @@ inputEndedConnection = UserInputService.InputEnded:Connect(function(input)
 		launcherDragging = false
 		launcherDragStart = nil
 		launcherStart = nil
-		sliderDragUpdate = nil
 		dragging = false
 		dragStart = nil
 		windowStart = nil
@@ -497,52 +493,65 @@ local function restoreFarmCollisions()
 	farmCollisionStates = nil
 end
 
-local function restoreFarmWalkSpeed()
-	if activeFarmHumanoid and activeFarmHumanoid.Parent and activeFarmWalkSpeed then
-		activeFarmHumanoid.WalkSpeed = activeFarmWalkSpeed
-	end
-	activeFarmHumanoid = nil
-	activeFarmWalkSpeed = nil
-end
-
 local function stopFarmMovement()
 	if activeFarmTween then
 		activeFarmTween:Cancel()
+		activeFarmTween = nil
 	end
 	if activeFarmHumanoid and activeFarmHumanoid.Parent then
-		local rootPart = activeFarmHumanoid.Parent:FindFirstChild("HumanoidRootPart")
-		if rootPart and rootPart:IsA("BasePart") then
-			activeFarmHumanoid:MoveTo(rootPart.Position)
+		activeFarmHumanoid.AutoRotate = activeFarmAutoRotate
+		activeFarmHumanoid.PlatformStand = activeFarmPlatformStand
+		if activeFarmHumanoid.Health > 0 and not activeFarmPlatformStand then
+			activeFarmHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
 		end
 	end
-	restoreFarmWalkSpeed()
+	activeFarmHumanoid = nil
+	activeFarmAutoRotate = nil
+	activeFarmPlatformStand = nil
 	restoreFarmCollisions()
 end
 
-local function setFarmCharacterCollision(character, enabled)
-	if not enabled then
-		restoreFarmCollisions()
-		farmCollisionStates = {}
-		for _, descendant in ipairs(character:GetDescendants()) do
-			if descendant:IsA("BasePart") then
-				farmCollisionStates[descendant] = descendant.CanCollide
-				descendant.CanCollide = false
-			end
-		end
-	else
-		restoreFarmCollisions()
+local function prepareFarmMovement(character, humanoid)
+	if activeFarmHumanoid ~= humanoid then
+		stopFarmMovement()
+		activeFarmHumanoid = humanoid
+		activeFarmAutoRotate = humanoid.AutoRotate
+		activeFarmPlatformStand = humanoid.PlatformStand
 	end
+
+	farmCollisionStates = farmCollisionStates or {}
+	for _, descendant in ipairs(character:GetDescendants()) do
+		if descendant:IsA("BasePart") then
+			if farmCollisionStates[descendant] == nil then
+				farmCollisionStates[descendant] = descendant.CanCollide
+			end
+			descendant.CanCollide = false
+		end
+	end
+	humanoid.AutoRotate = false
+	humanoid.PlatformStand = true
 end
 
-local function findNearestFarmTarget(itemType, rootPart, container)
+local function isValidFarmTarget(target, targetPart, container)
+	return target ~= nil
+		and targetPart ~= nil
+		and target.Name == "Coin"
+		and target:IsDescendantOf(container)
+		and targetPart:IsDescendantOf(container)
+		and not target:GetAttribute("Collected")
+		and not targetPart:GetAttribute("Collected")
+end
+
+local function findNearestFarmTarget(rootPart, container, cooldowns)
 	local nearestTarget
 	local nearestPart
 	local nearestDistance = math.huge
+	local now = os.clock()
 
 	for _, target in ipairs(container:GetDescendants()) do
-		if target.Name == itemType and target:IsDescendantOf(container) then
+		if target.Name == "Coin" and (cooldowns[target] or 0) <= now then
 			local targetPart = getFarmTargetPart(target)
-			if targetPart and targetPart:IsDescendantOf(container) then
+			if isValidFarmTarget(target, targetPart, container) then
 				local distance = (targetPart.Position - rootPart.Position).Magnitude
 				if distance < nearestDistance then
 					nearestTarget = target
@@ -556,9 +565,33 @@ local function findNearestFarmTarget(itemType, rootPart, container)
 	return nearestTarget, nearestPart
 end
 
-local function setAutoFarmEnabled(itemType, enabled)
-	autoFarmEnabled[itemType] = enabled
-	local toggle = autoFarmToggleButtons[itemType]
+local function moveFarmCharacter(rootPart, destination)
+	local distance = (destination - rootPart.Position).Magnitude
+	rootPart.AssemblyLinearVelocity = Vector3.zero
+	rootPart.AssemblyAngularVelocity = Vector3.zero
+	if distance <= 0.35 then
+		return Enum.PlaybackState.Completed
+	end
+
+	local tween = TweenService:Create(
+		rootPart,
+		TweenInfo.new(math.max(distance / autoFarmTravelSpeed, 0.05), Enum.EasingStyle.Linear),
+		{ CFrame = CFrame.new(destination) * rootPart.CFrame.Rotation }
+	)
+	activeFarmTween = tween
+	tween:Play()
+	local playbackState = tween.Completed:Wait()
+	if activeFarmTween == tween then
+		activeFarmTween = nil
+	end
+	return playbackState
+end
+
+local function setAutoFarmEnabled(enabled)
+	autoFarmEnabled = enabled
+	autoFarmGeneration += 1
+	local generation = autoFarmGeneration
+	local toggle = autoFarmToggleButton
 	if toggle then
 		local knob = toggle:FindFirstChild("ToggleKnob")
 		TweenService:Create(toggle, toggleTransitionInfo, {
@@ -575,146 +608,103 @@ local function setAutoFarmEnabled(itemType, enabled)
 
 	if not enabled then
 		stopFarmMovement()
-	end
-
-	if not autoFarmEnabled.Coin and not autoFarmEnabled.Candy then
-		stopFarmMovement()
 		return
 	end
 
-	if autoFarmRunning then
-		return
-	end
-
-	autoFarmRunning = true
 	task.spawn(function()
 		local warnedAboutCount = false
 		local warnedAboutContainer = false
-		while autoFarmEnabled.Coin or autoFarmEnabled.Candy do
+		local currentTarget
+		local cooldowns = {}
+		while autoFarmEnabled and autoFarmGeneration == generation do
 			local character = player.Character
 			local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 			local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 			local container = getFarmContainer()
-			local availableTypes = {}
 
 			if container then
 				warnedAboutContainer = false
 			elseif not warnedAboutContainer then
-				local childNames = {}
-				for _, child in ipairs(workspace:GetChildren()) do
-					table.insert(childNames, child.Name)
-				end
-				warn(("AutoFarm paused: no CoinContainer found in workspace. Top-level objects: %s")
-					:format(#childNames > 0 and table.concat(childNames, ", ") or "(none)"))
+				warn("Coin AutoFarm paused: no CoinContainer found in workspace.")
 				warnedAboutContainer = true
 			end
 
-			if rootPart and rootPart:IsA("BasePart") and humanoid and humanoid.Health > 0 and container then
-				for _, itemType in ipairs({ "Coin", "Candy" }) do
-					if autoFarmEnabled[itemType] then
-						local count, countError = getInventoryCount()
-						if count == nil then
-							if not warnedAboutCount then
-								warn(("AutoFarm paused: %s."):format(countError))
-								warnedAboutCount = true
-							end
-						else
-							warnedAboutCount = false
-							if count < 50 then
-								table.insert(availableTypes, itemType)
-							end
-						end
-					end
+			local count, countError = getInventoryCount()
+			if count == nil then
+				if not warnedAboutCount then
+					warn(("Coin AutoFarm paused: %s."):format(countError))
+					warnedAboutCount = true
 				end
+				stopFarmMovement()
+				task.wait(0.5)
+				continue
+			end
+			warnedAboutCount = false
+
+			if not rootPart or not rootPart:IsA("BasePart")
+				or not humanoid or humanoid.Health <= 0 or not container then
+				stopFarmMovement()
+				task.wait(0.25)
+				continue
 			end
 
-			local selectedTarget
-			local selectedPart
-			local selectedDistance = math.huge
-			for _, itemType in ipairs(availableTypes) do
-				local target, targetPart = findNearestFarmTarget(itemType, rootPart, container)
-				if targetPart then
-					local distance = (targetPart.Position - rootPart.Position).Magnitude
-					if distance < selectedDistance then
-						selectedTarget = target
-						selectedPart = targetPart
-						selectedDistance = distance
-					end
-				end
+			if count >= 50 then
+				currentTarget = nil
+				stopFarmMovement()
+				task.wait(0.5)
+				continue
 			end
 
-			if selectedTarget and selectedPart
-				and selectedTarget:IsDescendantOf(container)
-				and selectedPart:IsDescendantOf(container) then
-				local touchPosition = selectedPart.Position
+			local selectedPart = currentTarget and getFarmTargetPart(currentTarget)
+			if not isValidFarmTarget(currentTarget, selectedPart, container)
+				or (cooldowns[currentTarget] or 0) > os.clock() then
+				currentTarget, selectedPart = findNearestFarmTarget(rootPart, container, cooldowns)
+			end
+
+			if currentTarget and selectedPart then
+				prepareFarmMovement(character, humanoid)
+				local startingCount = count
+				local destination = selectedPart.Position
 					+ Vector3.new(0, (rootPart.Size.Y + selectedPart.Size.Y) / 2 - 0.05, 0)
-				local approachDirection = Vector3.new(
-					rootPart.Position.X - selectedPart.Position.X,
-					0,
-					rootPart.Position.Z - selectedPart.Position.Z
-				)
-				if approachDirection.Magnitude < 0.01 then
-					approachDirection = Vector3.new(1, 0, 0)
-				else
-					approachDirection = approachDirection.Unit
-				end
-				local tweenPosition = touchPosition + approachDirection * 2
-				local tweenDistance = (tweenPosition - rootPart.Position).Magnitude
-
-				setFarmCharacterCollision(character, false)
-				local tween = TweenService:Create(
-					rootPart,
-					TweenInfo.new(math.max(tweenDistance / autoFarmSpeed, 0.05), Enum.EasingStyle.Linear),
-					{ CFrame = CFrame.new(tweenPosition) * rootPart.CFrame.Rotation }
-				)
-				activeFarmTween = tween
-				local targetRemovedConnection = selectedTarget.AncestryChanged:Connect(function()
-					if not selectedTarget:IsDescendantOf(container) then
-						tween:Cancel()
+				local targetRemovedConnection = currentTarget.AncestryChanged:Connect(function()
+					if not currentTarget:IsDescendantOf(container) and activeFarmTween then
+						activeFarmTween:Cancel()
 					end
 				end)
 				local partRemovedConnection = selectedPart.AncestryChanged:Connect(function()
-					if not selectedPart:IsDescendantOf(container) then
-						tween:Cancel()
+					if not selectedPart:IsDescendantOf(container) and activeFarmTween then
+						activeFarmTween:Cancel()
 					end
 				end)
-				tween:Play()
-				local playbackState = tween.Completed:Wait()
+				local playbackState = moveFarmCharacter(rootPart, destination)
 				targetRemovedConnection:Disconnect()
 				partRemovedConnection:Disconnect()
-				if activeFarmTween == tween then
-					activeFarmTween = nil
-				end
-				restoreFarmCollisions()
 
-				if playbackState == Enum.PlaybackState.Completed
-					and selectedTarget:IsDescendantOf(container)
-					and selectedPart:IsDescendantOf(container)
-					and rootPart.Parent == character
-					and humanoid.Health > 0
-					and (autoFarmEnabled.Coin or autoFarmEnabled.Candy) then
-					activeFarmHumanoid = humanoid
-					activeFarmWalkSpeed = humanoid.WalkSpeed
-					humanoid.WalkSpeed = autoFarmSpeed
-					humanoid:MoveTo(touchPosition)
-					local reachedTarget = humanoid.MoveToFinished:Wait()
-					restoreFarmWalkSpeed()
-					if reachedTarget and (autoFarmEnabled.Coin or autoFarmEnabled.Candy) then
-						task.wait(0.6)
+				if autoFarmEnabled and autoFarmGeneration == generation
+					and playbackState == Enum.PlaybackState.Completed
+					and rootPart.Parent == character and humanoid.Health > 0
+					and isValidFarmTarget(currentTarget, selectedPart, container) then
+					task.wait(0.6)
+					local updatedCount = getInventoryCount()
+					if not isValidFarmTarget(currentTarget, selectedPart, container)
+						or (updatedCount and updatedCount > startingCount) then
+						cooldowns[currentTarget] = nil
+						currentTarget = nil
+					elseif isValidFarmTarget(currentTarget, selectedPart, container) then
+						cooldowns[currentTarget] = os.clock() + 8
+						currentTarget = nil
 					end
 				end
 			else
+				currentTarget = nil
+				stopFarmMovement()
 				task.wait(0.25)
 			end
 		end
 
-		if activeFarmTween then
-			activeFarmTween:Cancel()
-			activeFarmTween = nil
+		if autoFarmGeneration == generation then
+			stopFarmMovement()
 		end
-		stopFarmMovement()
-		restoreFarmCollisions()
-		autoFarmRunning = false
 	end)
 end
 
@@ -764,77 +754,12 @@ local function renderCards(cards)
 			TextYAlignment = Enum.TextYAlignment.Top,
 		}, cardFrame)
 
-		if card.action == "autoFarmSpeed" then
-			local valueLabel = create("TextLabel", {
-				Name = "SpeedValue",
-				AnchorPoint = Vector2.new(1, 0),
-				Position = UDim2.new(1, -14, 0, 29),
-				Size = UDim2.fromOffset(130, 16),
-				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamMedium,
-				Text = tostring(autoFarmSpeed) .. " /s",
-				TextColor3 = colors.text,
-				TextSize = 12,
-				TextXAlignment = Enum.TextXAlignment.Right,
-			}, cardFrame)
-			local sliderTrack = create("TextButton", {
-				Name = "SpeedSlider",
-				AnchorPoint = Vector2.new(1, 0.5),
-				Position = UDim2.new(1, -14, 0, 59),
-				Size = UDim2.fromOffset(130, 6),
-				BackgroundColor3 = colors.border,
-				BorderSizePixel = 0,
-				AutoButtonColor = false,
-				Text = "",
-			}, cardFrame)
-			create("UICorner", { CornerRadius = UDim.new(1, 0) }, sliderTrack)
-			local sliderFill = create("Frame", {
-				Name = "SliderFill",
-				Size = UDim2.new((autoFarmSpeed - 1) / 99, 0, 1, 0),
-				BackgroundColor3 = colors.accent,
-				BorderSizePixel = 0,
-			}, sliderTrack)
-			create("UICorner", { CornerRadius = UDim.new(1, 0) }, sliderFill)
-			local sliderKnob = create("Frame", {
-				Name = "SliderKnob",
-				AnchorPoint = Vector2.new(0.5, 0.5),
-				Position = UDim2.new((autoFarmSpeed - 1) / 99, 0, 0.5, 0),
-				Size = UDim2.fromOffset(14, 14),
-				BackgroundColor3 = colors.text,
-				BorderSizePixel = 0,
-			}, sliderTrack)
-			create("UICorner", { CornerRadius = UDim.new(1, 0) }, sliderKnob)
-
-			local function updateSlider(positionX)
-				local width = sliderTrack.AbsoluteSize.X
-				if width <= 0 then
-					return
-				end
-				local progress = math.clamp(
-					(positionX - sliderTrack.AbsolutePosition.X) / width,
-					0,
-					1
-				)
-				autoFarmSpeed = math.clamp(math.floor(1 + progress * 99 + 0.5), 1, 100)
-				local normalizedSpeed = (autoFarmSpeed - 1) / 99
-				valueLabel.Text = tostring(autoFarmSpeed) .. " /s"
-				sliderFill.Size = UDim2.new(normalizedSpeed, 0, 1, 0)
-				sliderKnob.Position = UDim2.new(normalizedSpeed, 0, 0.5, 0)
-			end
-
-			sliderTrack.InputBegan:Connect(function(input)
-				if input.UserInputType == Enum.UserInputType.MouseButton1
-					or input.UserInputType == Enum.UserInputType.Touch then
-					sliderDragUpdate = updateSlider
-					updateSlider(input.Position.X)
-				end
-			end)
-		elseif card.action then
+		if card.action then
 			local isAntiAfkToggle = card.action == "antiAfkToggle"
 			local isAutoFarmToggle = card.action == "autoFarmToggle"
 			local isToggle = isAntiAfkToggle or isAutoFarmToggle
 			local isEnabled = isAntiAfkToggle and antiAfkEnabled
-				or (isAutoFarmToggle and autoFarmEnabled[card.toggleKey] or false)
+				or (isAutoFarmToggle and autoFarmEnabled or false)
 			local actionButton = create("TextButton", {
 				Name = "ActionButton",
 				AnchorPoint = Vector2.new(1, 0.5),
@@ -871,7 +796,7 @@ local function renderCards(cards)
 				}, actionButton)
 				create("UICorner", { CornerRadius = UDim.new(1, 0) }, toggleKnob)
 				if isAutoFarmToggle then
-					autoFarmToggleButtons[card.toggleKey] = actionButton
+					autoFarmToggleButton = actionButton
 				end
 				actionButton.Activated:Connect(function()
 					if isAntiAfkToggle then
@@ -886,14 +811,13 @@ local function renderCards(cards)
 							BackgroundColor3 = enabled and colors.background or colors.text,
 						}):Play()
 					else
-						setAutoFarmEnabled(card.toggleKey, not autoFarmEnabled[card.toggleKey])
+						setAutoFarmEnabled(not autoFarmEnabled)
 					end
 				end)
 			elseif card.action == "unload" then
 				actionButton.Activated:Connect(function()
 					setAntiAfkEnabled(false)
-					setAutoFarmEnabled("Coin", false)
-					setAutoFarmEnabled("Candy", false)
+					setAutoFarmEnabled(false)
 					if inputChangedConnection then
 						inputChangedConnection:Disconnect()
 					end
@@ -987,22 +911,8 @@ local sections = {
 		cards = {
 			{
 				title = "Coin AutoFarm",
-				body = "Automatically collect Coin objects from the map.",
+				body = "Automatically collect map coins. Pauses when the bag is full.",
 				action = "autoFarmToggle",
-				toggleKey = "Coin",
-				height = 82,
-			},
-			{
-				title = "Candy AutoFarm",
-				body = "Automatically collect Candy objects from the map.",
-				action = "autoFarmToggle",
-				toggleKey = "Candy",
-				height = 82,
-			},
-			{
-				title = "AutoFarm Speed",
-				body = "Movement speed (1-100 studs per second).",
-				action = "autoFarmSpeed",
 				height = 82,
 			},
 		},
