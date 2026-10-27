@@ -11,7 +11,7 @@
 | **DOORS** | [`Doors_Scripts/Main.client.lua`](./Doors_Scripts/Main.client.lua) | Клиентский скрипт с игровыми функциями, настройками интерфейса и уведомлениями для DOORS. Использует UI-библиотеки Linoria/Obsidian и ESP-модуль. |
 | **Murder Mystery 2 (MM2)** | [`MM2_Scripts/Main.client.lua`](./MM2_Scripts/Main.client.lua) | Основной клиентский скрипт с меню, настройками и игровыми функциями, включая AutoFarm монет и Anti-AFK. |
 | **Murder Mystery 2 (MM2)** | [`MM2_Scripts/Safe.client.lua`](./MM2_Scripts/Safe.client.lua) | Облегчённый вариант с меню Speedy Client, переключением разделов и настройкой клавиши меню. |
-| **Roblox — FPS Boost** | [`Utilities_Scripts/FPSBoost.client.lua`](./Utilities_Scripts/FPSBoost.client.lua) | Перетаскиваемый FPS Viewer, FPS Unlocker при поддержке среды, минимальное качество графики Roblox, локальное упрощение материалов и скрытие 3D-объектов. |
+| **Roblox — FPS Boost** | [`Utilities_Scripts/FPSBoost.client.lua`](./Utilities_Scripts/FPSBoost.client.lua) | Перетаскиваемый FPS Viewer, FPS Unlocker при поддержке среды, минимальное качество графики Roblox, локальное упрощение материалов и скрытие 3D-объектов. В меню есть вкладка Settings с информацией о проекте и Unload script; версия интерфейса — 1.03.00. |
 
 ## На чём и как сделано
 
@@ -26,24 +26,24 @@
 
 ## Как запустить
 
-Добавьте сюда свои инструкции по запуску. У каждого блока кода в GitHub есть кнопка копирования — замените текст-заполнитель нужной инструкцией.
+Запускаем скрипты через Roblox Executor | Delta Executor - заходим во вторую вкладку и вставляем в строку текст снизу!
 
 ### DOORS
 
 ```text
-Добавьте сюда инструкцию запуска скрипта DOORS.
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Korchagin060912X/SpeedyClient_lua/main/Doors_Scripts/Main.client.lua"))()
 ```
 
 ### Murder Mystery 2 (MM2)
 
 ```text
-Добавьте сюда инструкцию запуска основного или Safe-скрипта MM2.
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Korchagin060912X/SpeedyClient_lua/main/MM2_Scripts/Main.client.lua"))()
 ```
 
 ### Roblox — FPS Boost
 
 ```text
-Добавьте сюда инструкцию запуска интерфейса FPS Boost.
+loadstring(game:HttpGet("https://raw.githubusercontent.com/Korchagin060912X/SpeedyClient_lua/main/Utilities_Scripts/FPSBoost.client.lua"))()
 ```
 
 ## Структура проекта
